@@ -18,10 +18,29 @@ cabal-version:       >=1.10
 
 executable mytardis-dicom
   main-is:             Main.hs
-  -- other-modules:
+  other-modules:       Mytardis, Checksum, Dicom
   -- other-extensions:
   build-depends:       base >=4.6 && <4.7
                      , mytardis-rest
+                     , optparse-applicative
+                     , mtl   <= 2.1.2
+                     , wreq
+                     , lens
+                     , bytestring
+                     , cryptohash
+                     , parsec
+                     , filepath
+                     , directory
+                     , transformers
+                     , Glob
+                     , Unixutils
+                     , unix
+                     , process
+                     , temporary
+                     , containers
+                     , aeson
+                     , safe
+                     , pipes <= 3.3.0
 
-  -- hs-source-dirs:
+  hs-source-dirs:      src
   default-language:    Haskell2010

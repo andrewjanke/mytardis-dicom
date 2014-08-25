@@ -4,9 +4,9 @@ PS4='($LINENO)+ '
 set -x
 set -e
 
-rm -fr .cabal-sandbox cabal.sandbox.config dist
+# rm -fr .cabal-sandbox cabal.sandbox.config dist
 
-cabal sandbox init
+cabal sandbox init --sandbox=../shared-cabal-sandbox-mytardis
 
 cabal sandbox add-source ../mytardis-rest
 
