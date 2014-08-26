@@ -36,14 +36,14 @@ schemaDataset     = "http://cai.uq.edu.au/schema/metadata/2"
 schemaDicomFile   = "http://cai.uq.edu.au/schema/metadata/3"
 schemaCaiProject  = "http://cai.uq.edu.au/schema/metadata/4"
 
+defaultInstitutionName = "DEFAULT INSTITUTION"
 
--- FIXME Has hardcoded stuff, only a single schema, , dangerous fromJusts.
 identifyExperiment :: [DicomFile] -> IdentifiedExperiment
-identifyExperiment files = IdentifiedExperiment -- FIXME testing, remove these fromJusts
+identifyExperiment files = IdentifiedExperiment
                                 description
-                                (fromJust institution)
-                                (fromJust title)
-                                [(schema, fromJust m)]
+                                institution
+                                title
+                                [(schema, m)]
   where
     oneFile = headMay files
 
@@ -52,31 +52,29 @@ identifyExperiment files = IdentifiedExperiment -- FIXME testing, remove these f
     seriesDescription = join $ dicomSeriesDescription <$> oneFile
 
     -- Experiment
-    title       = (experimentTitlePrefix ++) <$> patientName
+    title       = fromMaybe "DUD TITLE FIXME" $ (experimentTitlePrefix ++) <$> patientName
     description = experimentDescriptionPrefix
 
-    institution = join $ dicomInstitutionName <$> oneFile
+    institution = fromMaybe "DEFAULT INSTITUTION FIXME" $ join $ dicomInstitutionName <$> oneFile
 
-    institutionalDepartmentName = join $ dicomInstitutionName       <$> oneFile
-    institutionAddress          = join $ dicomInstitutionAddress    <$> oneFile
-    patientID                   = join $ dicomPatientID             <$> oneFile
+    institutionalDepartmentName = fromMaybe "DEFAULT INSTITUTION DEPT NAME FIXME" $ join $ dicomInstitutionName    <$> oneFile
+    institutionAddress          = fromMaybe "DEFAULT INSTITUTION ADDRESS FIXME" $ join $ dicomInstitutionAddress <$> oneFile
+
+    patientID = fromMaybe "FIXME DUD PATIENT ID" $ join $ dicomPatientID <$> oneFile -- FIXME dangerous? Always get a patient id?
 
     -- FIXME deal with multiple schemas.
     schema = "http://cai.uq.edu.au/schema/metadata/1" -- "DICOM Experiment Metadata"
-    m = case (institution, institutionalDepartmentName, institutionAddress, patientID) of
-        (Just institution', Just institutionalDepartmentName', Just institutionAddress', Just patientID') -> Just $ M.fromList
-                                                                                                                [ ("InstitutionName",             institution')
-                                                                                                                , ("InstitutionalDepartmentName", institutionalDepartmentName')
-                                                                                                                , ("InstitutionAddress",          institutionAddress')
-                                                                                                                , ("PatientID",                   patientID')
-                                                                                                                ]
-        _ -> Nothing -- FIXME report what went wrong?
 
+    m = M.fromList
+            [ ("InstitutionName",             institution)
+            , ("InstitutionalDepartmentName", institutionalDepartmentName)
+            , ("InstitutionAddress",          institutionAddress)
+            , ("PatientID",                   patientID)
+            ]
 
 -- FIXME WHAT HAPPENS WHEN ONE DATASET BELONGS TO MULTIPLE EXPERIMENTS? DO WE HAVE
 -- TO DEAL WITH THAT WHEN MATCHING DATASETS?
 
--- FIXME Dangerous fromJusts, need to use a Maybe return type or something.
 identifyDataset :: RestExperiment -> [DicomFile] -> IdentifiedDataset
 identifyDataset re files = IdentifiedDataset
                                 description
@@ -84,10 +82,10 @@ identifyDataset re files = IdentifiedDataset
                                 m
   where
     oneFile = head files -- FIXME this will explode, use headMay instead
-    description = (fromJust $ dicomStudyDescription oneFile) ++ "/" ++ (fromJust $ dicomSeriesDescription oneFile) -- FIXME fromJust
+    description = (fromMaybe "FIXME STUDY DESCRIPTION" $ dicomStudyDescription oneFile) ++ "/" ++ (fromMaybe "FIXME SERIES DESCRIPTION" $ dicomSeriesDescription oneFile)
     experiments = [eiResourceURI re]
     schema      = schemaDataset
-    m           = [] -- FIXME we should do some metadata for datasets! [(schema, fromJust m)]
+    m           = [] -- FIXME we should do some metadata for datasets! [(schema, m)]
 
 identifyDatasetFile :: RestDataset -> String -> String -> Integer -> [(String, M.Map String String)] -> IdentifiedFile
 identifyDatasetFile rds filepath md5sum size metadata = IdentifiedFile
@@ -123,7 +121,7 @@ uploadDicomAsMinc :: FilePath -> ReaderT MyTardisConfig IO ()
 uploadDicomAsMinc dir = do
     -- ever get an empty list in files?
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
-    let groups = concatMap groupDicomFilesByStudyAndSeries (groupDicomFilesByPatientID _files)
+    let groups = group2 _files
 
     forM_ groups $ \files -> do
         -- let IdentifiedExperiment desc institution title metadata = identifyExperiment files
@@ -147,13 +145,13 @@ uploadDicomAsMinc dir = do
 
                                   let oneFile = head files -- FIXME unsafe
                                       filemetadata = [(schemaDicomFile, M.fromList
-                                                                            [ ("PatientID",          fromJust $ dicomPatientID         oneFile) -- FIXME fromJusts....
-                                                                            , ("StudyInstanceUID",   fromJust $ dicomStudyInstanceUID  oneFile)
-                                                                            , ("SeriesInstanceUID",  fromJust $ dicomSeriesInstanceUID oneFile)
+                                                                            [ ("PatientID",          fromMaybe "FIXME2 PATIENT ID"   $ dicomPatientID         oneFile)
+                                                                            , ("StudyInstanceUID",   fromMaybe "FIXME2 STUDY UID"    $ dicomStudyInstanceUID  oneFile)
+                                                                            , ("SeriesInstanceUID",  fromMaybe "FIXME2 INSTANCE UID" $ dicomSeriesInstanceUID oneFile)
                                                                             ]
                                                       )
                                                      ]
-
+ 
                                   forM_ mincFiles $ \f -> do
                                         dsf <- uploadFileBasic d f filemetadata
                                         liftIO $ print dsf
@@ -162,3 +160,13 @@ uploadDicomAsMinc dir = do
                                         dsft <- uploadFileBasic d thumbnail filemetadata
 
                                         liftIO $ print dsft
+
+
+        -- FIXME Need to catch IO exceptions earlier...
+        liftIO $ forM_ files $ \f -> do
+            let f' = dicomFilePath f
+
+            copyFile f' ("/tmp/processed" </> (takeFileName f'))-- FIXME hardcoded path
+            -- FIXME check exceptions
+            -- FIXME check if target exists and make backup instead...
+            removeFile f'

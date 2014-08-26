@@ -7,14 +7,17 @@ import Prelude hiding (FilePath)
 
 import Data.Either
 import Data.Char (toLower)
+import Data.List
 import Control.Applicative ((<$>), (<*>), (<*))
-import Control.Monad (mapM, filterM, zipWithM, forM_)
+import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.Reader
+import Control.Monad.ST
 import Control.Monad.Trans.Writer.Lazy ()
 import Control.Proxy
 import Control.Proxy.Trans.Writer
 import Data.Function (on)
+import Data.Ord (comparing)
 import Data.Functor.Identity
 import Data.List (isInfixOf, groupBy, isSuffixOf)
 import System.Directory
@@ -255,6 +258,7 @@ getDicomFilesInDirectory suffix dir = filter (isLowerSuffix suffix) <$> getFiles
     getFilesInDirectory :: FilePath -> IO [FilePath]
     getFilesInDirectory d = map (d </>) <$> filter (not . (`elem` [".", ".."])) <$> getDirectoryContents d >>= filterM doesFileExist
 
+{-
 groupDicomFilesByPatientID files = groupBy ((==) `on` dicomPatientID) files
 
 groupDicomFilesByStudyAndSeries :: [DicomFile] -> [[DicomFile]]
@@ -262,11 +266,19 @@ groupDicomFilesByStudyAndSeries files = groupBy f files
   where
     f d1 d2 = dicomStudyDescription  d1 == dicomStudyDescription  d2 &&
               dicomSeriesDescription d1 == dicomSeriesDescription d2
+-}
 
+group2 :: [DicomFile] -> [[DicomFile]]
+group2 files = fmap (map snd) $ groupBy ((==) `on` fst) (sortOn fst $ map toTuple files)
 
+  where
 
+    toTuple file = ((dicomPatientID file, dicomStudyDescription file, dicomSeriesDescription file), file)
 
-
+    -- https://ghc.haskell.org/trac/ghc/ticket/9004
+    sortOn :: Ord b => (a -> b) -> [a] -> [a]
+    sortOn f = map snd . sortBy (comparing fst)
+                       . map (\x -> let y = f x in y `seq` (y, x))
 
 
 

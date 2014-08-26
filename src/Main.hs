@@ -68,8 +68,7 @@ dostuff opts@(UploaderOptions _ _ _ (CmdShowExperiments cmdShow)) = do
     let dir = askDicomDir opts
 
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
-    let
-        groups = concatMap groupDicomFilesByStudyAndSeries (groupDicomFilesByPatientID _files)
+    let groups = group2 _files
 
     forM_ groups $ \files -> do
         let
@@ -80,7 +79,7 @@ dostuff opts@(UploaderOptions _ _ _ (CmdShowExperiments cmdShow)) = do
             then printf "%s [%s] [%s] [%s] [%s]\n" hash institution desc title (unwords $ map dicomFilePath files)
             else printf "%s [%s] [%s] [%s]\n"      hash institution desc title
 
-dostuff opts = uploadDicomAsMinc (askDicomDir opts)
+dostuff opts@(UploaderOptions _ _ _ (CmdUploadAll allOpts)) = uploadDicomAsMinc (askDicomDir opts)
 
 dostuff opts@(UploaderOptions _ _ _ (CmdUploadOne oneOpts)) = do
     let hash = uploadOneHash oneOpts
@@ -88,14 +87,14 @@ dostuff opts@(UploaderOptions _ _ _ (CmdUploadOne oneOpts)) = do
     let dir = askDicomDir opts
 
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
-    let groups = concatMap groupDicomFilesByStudyAndSeries (groupDicomFilesByPatientID _files)
+    let groups = group2 _files
 
     let
         hashes = map (hashFiles . fmap dicomFilePath) groups :: [String]
         matches = filter ((==) hash . snd) (zip groups hashes) :: [([DicomFile], String)]
 
     case matches of [match] -> liftIO $ print match
-                    []      -> liftIO $ putStrLn "That has does not match any identified experiment."
+                    []      -> liftIO $ putStrLn "Hash does not match any identified experiment."
                     _       -> error "Multiple experiments with the same hash. Oh noes!"
 
 main :: IO ()
@@ -114,4 +113,17 @@ main = do
   where
 
     opts = info (helper <*> pUploaderOptions ) (fullDesc <> header "mytardis-dicom - upload DICOM files to a MyTARDIS server" )
+
+testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin" "admin") blah
+  where
+    blah :: ReaderT MyTardisConfig IO ()
+    blah = do
+        let dir = "/tmp/dicomdump"
+
+        _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
+        let files = head $ group2 _files
+
+        x <- getExperimentWithMetadata (identifyExperiment files)
+
+        liftIO $ print x
 
