@@ -43,8 +43,8 @@ executable mytardis-dicom
                      , aeson
                      , safe
                      , pipes <= 3.3.0
-                     , hashable
-                     , hashtables
+                     , bytestring
+                     , tagsoup
 
   hs-source-dirs:      src
   default-language:    Haskell2010

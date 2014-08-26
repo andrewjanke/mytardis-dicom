@@ -8,6 +8,7 @@ import Prelude hiding (FilePath)
 import Data.Either
 import Data.Char (toLower)
 import Data.List
+import Data.Maybe
 import Control.Applicative ((<$>), (<*>), (<*))
 import Control.Monad
 import Control.Monad.Identity
@@ -23,8 +24,8 @@ import Data.List (isInfixOf, groupBy, isSuffixOf)
 import System.Directory
 import System.FilePath
 import System.FilePath.Glob
+import Text.HTML.TagSoup.Entity (lookupEntity)
 import Text.Parsec
-import Text.Parsec.String ()
 
 import System.IO.Temp
 import System.Posix.Files
@@ -35,6 +36,17 @@ import System.Exit (ExitCode(..))
 import System.Unix.Directory (removeRecursiveSafely)
 
 import Utils (runShellCommand)
+
+-- http://stackoverflow.com/a/7233657/3659845
+unescapeEntities :: String -> String
+unescapeEntities [] = []
+unescapeEntities ('&':xs) =
+  let (b, a) = break (== ';') xs in
+  case (lookupEntity b, a) of
+    (Just c, ';':as) ->  c ++ unescapeEntities as
+    _                -> '&' : unescapeEntities xs
+unescapeEntities (x:xs) = x : unescapeEntities xs
+
 
 -- Note on execWriterT/raiseK: http://ocharles.org.uk/blog/posts/2012-12-16-24-days-of-hackage-pipes.html
 getRecursiveContentsList :: FilePath -> IO [FilePath]
@@ -53,7 +65,7 @@ getRecursiveContentsList path =
           else respond path
 
 dcmDump :: FilePath -> IO (Either String String)
-dcmDump fileName = runShellCommand "dcmdump" [fileName]
+dcmDump fileName = runShellCommand "dcmdump" ["+Qn", fileName]
 
 globDcmFiles :: FilePath -> IO ([[FilePath]], [FilePath])
 globDcmFiles = globDirWith (matchDefault { ignoreCase = True }) [compile "*.dcm"]
@@ -83,7 +95,7 @@ dicomToMinc dicomFiles = do
     case result of Right result' -> Right <$> getRecursiveContentsList outputDir
                    Left e        -> return $ Left e
 
-mncToMnc2 :: FilePath -> IO (Either String String)
+mncToMnc2 :: FilePath -> IO (Either String FilePath)
 mncToMnc2 filePath = do
     tmpFile <- fst <$> openTempFile "/tmp" "mincto2.mnc"
 
@@ -210,7 +222,7 @@ readDicomMetadata fileName = do
 
     case dump of
         Left e      -> return $ Left e
-        Right dump' -> let parseHere p = parseSingleMatch p dump' in
+        Right dump' -> let parseHere p = (unescapeEntities <$> parseSingleMatch p dump') in
                             return $ Right $ DicomFile
                                     fileName
                                     (parseHere pPatientName)

@@ -118,6 +118,7 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
   where
     blah :: ReaderT MyTardisConfig IO ()
     blah = do
+        {-
         let dir = "/tmp/dicomdump"
 
         _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
@@ -126,4 +127,8 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
         x <- getExperimentWithMetadata (identifyExperiment files)
 
         liftIO $ print x
+        -}
 
+        d <- getDatasets
+
+        liftIO $ print d
