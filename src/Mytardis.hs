@@ -117,8 +117,8 @@ uploadFileBasic d f m = do
         Nothing                        -> return $ Error "FIXME1234"
 
 
-uploadDicomAsMinc :: FilePath -> ReaderT MyTardisConfig IO ()
-uploadDicomAsMinc dir = do
+uploadDicomAsMinc :: FilePath -> FilePath -> ReaderT MyTardisConfig IO ()
+uploadDicomAsMinc dir processedDir = do
     -- ever get an empty list in files?
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
     let groups = group2 _files
@@ -166,7 +166,7 @@ uploadDicomAsMinc dir = do
         liftIO $ forM_ files $ \f -> do
             let f' = dicomFilePath f
 
-            copyFile f' ("/tmp/processed" </> (takeFileName f'))-- FIXME hardcoded path
+            copyFile f' (processedDir </> (takeFileName f'))
             -- FIXME check exceptions
             -- FIXME check if target exists and make backup instead...
             removeFile f'

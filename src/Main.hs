@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Monad.Reader
+import Data.Configurator
 import Data.Either
 import Data.Maybe
 import Options.Applicative
@@ -12,9 +13,6 @@ import Dicom
 import Mytardis
 import MytardisRest
 import Types
-
-
-myTardisDefaultDir = "." -- FIXME move somewhere else?
 
 data Command
     = CmdUploadAll       UploadAllOptions
@@ -31,6 +29,7 @@ data UploaderOptions = UploaderOptions
     { optDirectory  :: Maybe FilePath
     , optHost       :: Maybe String
     , optUser       :: Maybe String
+    , optProcessedDir :: FilePath
     , optCommand    :: Command
     }
     deriving (Eq, Show)
@@ -46,9 +45,10 @@ pShowExprOptions = CmdShowExperiments <$> ShowExperimentsOptions <$> switch (lon
 
 pUploaderOptions :: Parser UploaderOptions
 pUploaderOptions = UploaderOptions
-    <$> optional (strOption (long "dir" <> metavar "DIRECTORY" <> help "Directory with DICOM files."))
-    <*> optional (strOption (long "host" <> metavar "HOST" <> help "MyTARDIS host URL, e.g. http://localhost:8000"))
-    <*> optional (strOption (long "user" <> metavar "USERNAME" <> help "MyTARDIS username."))
+    <$> optional (strOption (long "input-dir"     <> metavar "DIRECTORY" <> help "Directory with DICOM files."))
+    <*> optional (strOption (long "host"          <> metavar "HOST"      <> help "MyTARDIS host URL, e.g. http://localhost:8000"))
+    <*> optional (strOption (long "user"          <> metavar "USERNAME"  <> help "MyTARDIS username."))
+    <*>          (strOption (long "processed-dir" <> metavar "DIRECTORY" <> help "Directory for processed DICOM files."))
     <*> subparser x
   where
     x    = cmd1 <> cmd2 <> cmd3
@@ -56,16 +56,16 @@ pUploaderOptions = UploaderOptions
     cmd2 = command "upload-one"       (info (helper <*> pUploadOneOptions) (progDesc "Upload a single experiment."))
     cmd3 = command "show-experiments" (info (helper <*> pShowExprOptions)  (progDesc "Show local experiments."))
 
-askDicomDir :: UploaderOptions -> FilePath
-askDicomDir opts = fromMaybe "." (optDirectory opts)
+getDicomDir :: UploaderOptions -> FilePath
+getDicomDir opts = fromMaybe "." (optDirectory opts)
 
 hashFiles :: [FilePath] -> String
 hashFiles = sha256 . unwords
 
 dostuff :: UploaderOptions -> ReaderT MyTardisConfig IO ()
 
-dostuff opts@(UploaderOptions _ _ _ (CmdShowExperiments cmdShow)) = do
-    let dir = askDicomDir opts
+dostuff opts@(UploaderOptions _ _ _ _ (CmdShowExperiments cmdShow)) = do
+    let dir = getDicomDir opts
 
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
     let groups = group2 _files
@@ -79,12 +79,12 @@ dostuff opts@(UploaderOptions _ _ _ (CmdShowExperiments cmdShow)) = do
             then printf "%s [%s] [%s] [%s] [%s]\n" hash institution desc title (unwords $ map dicomFilePath files)
             else printf "%s [%s] [%s] [%s]\n"      hash institution desc title
 
-dostuff opts@(UploaderOptions _ _ _ (CmdUploadAll allOpts)) = uploadDicomAsMinc (askDicomDir opts)
+dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadAll allOpts)) = uploadDicomAsMinc (getDicomDir opts) (optProcessedDir opts)
 
-dostuff opts@(UploaderOptions _ _ _ (CmdUploadOne oneOpts)) = do
+dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadOne oneOpts)) = do
     let hash = uploadOneHash oneOpts
 
-    let dir = askDicomDir opts
+    let dir = getDicomDir opts
 
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
     let groups = group2 _files
@@ -97,6 +97,12 @@ dostuff opts@(UploaderOptions _ _ _ (CmdUploadOne oneOpts)) = do
                     []      -> liftIO $ putStrLn "Hash does not match any identified experiment."
                     _       -> error "Multiple experiments with the same hash. Oh noes!"
 
+main = do
+    config <- load [Required "sample.conf"]
+
+    display config
+
+{-
 main :: IO ()
 main = do
     opts' <- execParser opts
@@ -113,6 +119,7 @@ main = do
   where
 
     opts = info (helper <*> pUploaderOptions ) (fullDesc <> header "mytardis-dicom - upload DICOM files to a MyTARDIS server" )
+-}
 
 testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin" "admin") blah
   where
@@ -129,6 +136,6 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
         liftIO $ print x
         -}
 
-        d <- getDatasets
-
-        liftIO $ print d
+        forM_ [1..50] $ \i -> do
+            e <- createExperiment $ IdentifiedExperiment (show i) "UQ" (show i) []
+            liftIO $ print e
