@@ -25,7 +25,7 @@ executable mytardis-dicom
   build-depends:       base >=4.6 && <4.7
                      , mytardis-rest
                      , optparse-applicative
-                     , mtl   <= 2.1.2
+                     , mtl
                      , wreq
                      , lens
                      , bytestring
@@ -34,7 +34,6 @@ executable mytardis-dicom
                      , filepath
                      , directory
                      , transformers
-                     , Glob
                      , Unixutils
                      , unix
                      , process
@@ -42,9 +41,10 @@ executable mytardis-dicom
                      , containers
                      , aeson
                      , safe
-                     , pipes <= 3.3.0
                      , bytestring
                      , tagsoup
+                     , configurator
+                     , filemanip
 
   hs-source-dirs:      src
   default-language:    Haskell2010
