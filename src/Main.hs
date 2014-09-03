@@ -178,9 +178,13 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
         experiment' <- addGroupReadOnlyAccess experiment cai12345
         liftIO $ print ("experiment'", experiment')
 
+        user' <- addGroupToUser admin cai12345
+        liftIO $ print user'
+
         liftIO $ print "done"
 
-
+-- | Get a Group with a given name, or create it if it doesn't already exist. Will fail if
+-- a duplicate group name is discovered.
 getOrCreateGroup  :: String -> ReaderT MyTardisConfig IO (A.Result RestGroup)
 getOrCreateGroup name = do
     groups <- traverse (filter (((==) name) . groupName)) <$> getGroups
@@ -190,6 +194,8 @@ getOrCreateGroup name = do
         [A.Success group] -> return $ A.Success group
         _                 -> return $ A.Error $ "Duplicate groups found with name: " ++ name
 
+-- | Create an ObjectACL that gives a group read-only access to an experiment. Note that the ObjectACL
+-- has to be added to an experiment; see "addGroupReadOnlyAccess".
 getOrCreateExperimentACL  :: RestExperiment -> RestGroup -> ReaderT MyTardisConfig IO (A.Result RestObjectACL)
 getOrCreateExperimentACL experiment group = do
     acls <- traverse (filter f) <$> getObjectACLs
@@ -210,7 +216,15 @@ getOrCreateExperimentACL experiment group = do
           && objectObjectID         acl == eiID experiment
           && objectPluginId         acl == "django_group"
 
+-- addGroupToUser :: RestUser -> RestGroup -> ReaderT MyTardisConfig IO (A.Result RestUser)
+addGroupToUser user group = do
+    if any ((==) (groupName group)) (map groupName currentGroups)
+        then return $ A.Success user
+        else updateResource (user { ruserGroups = group:currentGroups }) ruserResourceURI getUser
+  where
+    currentGroups = ruserGroups user
 
+-- | Allow a Group to have read-only access to an experiment.
 addGroupReadOnlyAccess  :: RestExperiment -> RestGroup -> ReaderT MyTardisConfig IO (A.Result RestExperiment)
 addGroupReadOnlyAccess experiment group = do
     acl <- getOrCreateExperimentACL experiment group
@@ -221,6 +235,7 @@ addGroupReadOnlyAccess experiment group = do
 
   where
 
+    -- Avoid adding the ACL if we have one with the same general attributes.
     addAcl  :: RestObjectACL -> [RestObjectACL] -> [RestObjectACL]
     addAcl acl acls = if any (aclEq acl) acls
                             then acls
@@ -356,8 +371,6 @@ identifyDatasetFile rds filepath md5sum size metadata = IdentifiedFile
                                         md5sum
                                         size
                                         metadata
-
-
 
 grabMetadata :: DicomFile -> [(String, String)]
 grabMetadata file = map oops $ concatMap f metadata
