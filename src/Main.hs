@@ -2,9 +2,14 @@ module Main where
 
 import Control.Monad.Reader
 import Data.Configurator
+import Data.Traversable (traverse)
 import Data.Either
+import qualified Data.Foldable as DF
 import Data.Maybe
+import qualified Data.Map as M
+import qualified Data.Aeson as A
 import Options.Applicative
+import Safe (headMay)
 import Text.Printf (printf)
 
 -- Local modules
@@ -12,6 +17,7 @@ import Checksum
 import Dicom
 import Mytardis
 import MytardisRest
+import RestTypes
 import Types
 
 data Command
@@ -70,6 +76,8 @@ dostuff opts@(UploaderOptions _ _ _ _ (CmdShowExperiments cmdShow)) = do
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
     let groups = group2 _files
 
+    liftIO $ print groups
+
     forM_ groups $ \files -> do
         let
             IdentifiedExperiment desc institution title metadata = identifyExperiment files
@@ -79,7 +87,7 @@ dostuff opts@(UploaderOptions _ _ _ _ (CmdShowExperiments cmdShow)) = do
             then printf "%s [%s] [%s] [%s] [%s]\n" hash institution desc title (unwords $ map dicomFilePath files)
             else printf "%s [%s] [%s] [%s]\n"      hash institution desc title
 
-dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadAll allOpts)) = uploadDicomAsMinc (getDicomDir opts) (optProcessedDir opts)
+dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadAll allOpts)) = uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile (getDicomDir opts) (optProcessedDir opts)
 
 dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadOne oneOpts)) = do
     let hash = uploadOneHash oneOpts
@@ -97,12 +105,13 @@ dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadOne oneOpts)) = do
                     []      -> liftIO $ putStrLn "Hash does not match any identified experiment."
                     _       -> error "Multiple experiments with the same hash. Oh noes!"
 
+{-
 main = do
     config <- load [Required "sample.conf"]
 
     display config
+-}
 
-{-
 main :: IO ()
 main = do
     opts' <- execParser opts
@@ -119,7 +128,6 @@ main = do
   where
 
     opts = info (helper <*> pUploaderOptions ) (fullDesc <> header "mytardis-dicom - upload DICOM files to a MyTARDIS server" )
--}
 
 testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin" "admin") blah
   where
@@ -136,6 +144,267 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
         liftIO $ print x
         -}
 
+        {-
         forM_ [1..50] $ \i -> do
             e <- createExperiment $ IdentifiedExperiment (show i) "UQ" (show i) []
             liftIO $ print e
+        -}
+
+        A.Success users <- getUsers
+
+        let admin = head $ filter (\x -> ruserUsername x == "admin") users
+
+
+        A.Success cai12345 <- getOrCreateGroup "CAI 12345"
+
+        liftIO $ print admin
+        liftIO $ print cai12345
+
+        A.Success experiment <- getExperiment "/api/v1/experiment/1/"
+        liftIO $ print experiment
+
+        -- addGroupReadOnlyAccess experiment cai12345
+
+
+        -- liftIO $ print "Up to here..."
+
+        -- newacl <- createExperimentObjectACL cai12345 experiment False True False
+
+        -- liftIO $ print newacl
+
+        eacl <- getOrCreateExperimentACL experiment cai12345
+        liftIO $ print ("eacl", eacl)
+ 
+        experiment' <- addGroupReadOnlyAccess experiment cai12345
+        liftIO $ print ("experiment'", experiment')
+
+        liftIO $ print "done"
+
+
+getOrCreateGroup  :: String -> ReaderT MyTardisConfig IO (A.Result RestGroup)
+getOrCreateGroup name = do
+    groups <- traverse (filter (((==) name) . groupName)) <$> getGroups
+
+    case groups of
+        []                -> createGroup name
+        [A.Success group] -> return $ A.Success group
+        _                 -> return $ A.Error $ "Duplicate groups found with name: " ++ name
+
+getOrCreateExperimentACL  :: RestExperiment -> RestGroup -> ReaderT MyTardisConfig IO (A.Result RestObjectACL)
+getOrCreateExperimentACL experiment group = do
+    acls <- traverse (filter f) <$> getObjectACLs
+
+    case acls of
+        []              -> createExperimentObjectACL group experiment False True False
+        [A.Success acl] -> return $ A.Success acl
+        _               -> return $ A.Error $ "Duplicate Object ACLs found for: " ++ show experiment ++ " " ++ show group
+
+  where
+
+    f acl =  objectAclOwnershipType acl == 1
+          && objectCanDelete        acl == False
+          && objectCanRead          acl == True
+          && objectCanWrite         acl == False
+          && objectEntityId         acl == show (groupID group)
+          && objectIsOwner          acl == False
+          && objectObjectID         acl == eiID experiment
+          && objectPluginId         acl == "django_group"
+
+
+addGroupReadOnlyAccess  :: RestExperiment -> RestGroup -> ReaderT MyTardisConfig IO (A.Result RestExperiment)
+addGroupReadOnlyAccess experiment group = do
+    acl <- getOrCreateExperimentACL experiment group
+
+    case acl of
+        A.Success acl' -> updateResource (experiment { eiObjectACLs = addAcl acl' (eiObjectACLs experiment) }) eiResourceURI getExperiment
+        A.Error   e    -> return $ A.Error e
+
+  where
+
+    addAcl  :: RestObjectACL -> [RestObjectACL] -> [RestObjectACL]
+    addAcl acl acls = if any (aclEq acl) acls
+                            then acls
+                            else acl:acls
+
+    aclEq :: RestObjectACL -> RestObjectACL -> Bool
+    aclEq acl1 acl2 =  objectAclOwnershipType acl1 == objectAclOwnershipType acl2
+                    && objectCanDelete        acl1 == objectCanDelete        acl2
+                    && objectCanRead          acl1 == objectCanRead          acl2
+                    && objectCanWrite         acl1 == objectCanWrite         acl2
+                    && objectEntityId         acl1 == objectEntityId         acl2
+                    && objectIsOwner          acl1 == objectIsOwner          acl2
+                    && objectObjectID         acl1 == objectObjectID         acl2
+                    && objectPluginId         acl1 == objectPluginId         acl2
+
+newtype PS = PS (String, M.Map String String)
+    deriving (Eq, Show)
+
+data Flabert = Flabert
+    { idExperiment  :: [DicomFile] -> IdentifiedExperiment                  -- ^ Identify an experiment.
+    , idDataset     :: RestExperiment -> [DicomFile] -> IdentifiedDataset   -- ^ Given a particular experiment on MyTARDIS, identify the local dataset.
+
+
+     -- ^ Given a particular dataset in MyTARDIS, identify ,
+     , idDatasetFile :: RestDataset                         -- ^ Dataset on MyTARDIS.
+                     -> FilePath                            -- ^ Full path to file.
+                     -> String                              -- ^ Md5sum.
+                     -> Integer                             -- ^ File size.
+                     -> [(String, M.Map String String)]     -- ^ Metadata map.
+                     -> IdentifiedFile
+    }
+    
+    -- [ [DicomFile] -> A.Result [PS] ]
+
+-- noFlaberts = Flabert []
+
+mkCaiExperimentPS :: String -> PS
+mkCaiExperimentPS pid = PS ("http://cai.uq.edu.au/schema/1", undefined) -- FIXME hardcoded
+
+caiProjectID :: [DicomFile] -> A.Result [PS]
+caiProjectID files = let oneFile = headMay files in
+    case oneFile of
+        Nothing   -> A.Error "No DICOM files; can't determine CAI Project ID."
+        Just file -> case dicomReferringPhysicianName file of
+                        Nothing     -> A.Error "Referring Physician Name field is empty; can't determine CAI Project ID."
+                        Just rphys  -> if is5digits rphys
+                                            then A.Success [mkCaiExperimentPS rphys]
+                                            else A.Error $ "Referring Physician Name is not a 5 digit number: " ++ rphys
+
+  where
+
+    is5digits :: String -> Bool
+    is5digits s = (length s == 5) && (isJust $ (readMaybe s :: Maybe Integer))
+
+    readMaybe :: (Read a) => String -> Maybe a
+    readMaybe s =
+      case reads s of
+          [(a, "")] -> Just a
+          _         -> Nothing
+
+
+
+runThingos :: [Flabert] -> [DicomFile] -> A.Result [PS]
+runThingos flab files = undefined
+  where
+    stuff = undefined -- flab <*> files
+
+
+
+-- FIXME Testing, need to work out what these will be later.
+experimentTitlePrefix = "CAI Test Experiment "
+experimentDescriptionPrefix = "CAI Test Experiment Description"
+datasetDescription = "CAI Dataset Description"
+
+-- FIXME These should be in a reader or something.
+schemaExperiment  = "http://cai.uq.edu.au/schema/metadata/1"
+schemaDataset     = "http://cai.uq.edu.au/schema/metadata/2"
+schemaDicomFile   = "http://cai.uq.edu.au/schema/metadata/3"
+schemaCaiProject  = "http://cai.uq.edu.au/schema/metadata/4"
+
+defaultInstitutionName = "DEFAULT INSTITUTION"
+
+identifyExperiment :: [DicomFile] -> IdentifiedExperiment
+identifyExperiment files = IdentifiedExperiment
+                                description
+                                institution
+                                title
+                                [(schema, m)]
+  where
+    oneFile = headMay files
+
+    patientName       = join $ dicomPatientName       <$> oneFile
+    studyDescription  = join $ dicomStudyDescription  <$> oneFile
+    seriesDescription = join $ dicomSeriesDescription <$> oneFile
+
+    -- Experiment
+    title       = fromMaybe "DUD TITLE FIXME" $ (experimentTitlePrefix ++) <$> patientName
+    description = experimentDescriptionPrefix
+
+    institution = fromMaybe "DEFAULT INSTITUTION FIXME" $ join $ dicomInstitutionName <$> oneFile
+
+    institutionalDepartmentName = fromMaybe "DEFAULT INSTITUTION DEPT NAME FIXME" $ join $ dicomInstitutionName    <$> oneFile
+    institutionAddress          = fromMaybe "DEFAULT INSTITUTION ADDRESS FIXME" $ join $ dicomInstitutionAddress <$> oneFile
+
+    patientID = fromMaybe "FIXME DUD PATIENT ID" $ join $ dicomPatientID <$> oneFile -- FIXME dangerous? Always get a patient id?
+
+    -- FIXME deal with multiple schemas.
+    schema = "http://cai.uq.edu.au/schema/metadata/1" -- "DICOM Experiment Metadata"
+
+    m = M.fromList
+            [ ("InstitutionName",             institution)
+            , ("InstitutionalDepartmentName", institutionalDepartmentName)
+            , ("InstitutionAddress",          institutionAddress)
+            , ("PatientID",                   patientID)
+            ]
+
+identifyDataset :: RestExperiment -> [DicomFile] -> IdentifiedDataset
+identifyDataset re files = IdentifiedDataset
+                                description
+                                experiments
+                                m
+  where
+    oneFile = head files -- FIXME this will explode, use headMay instead
+    description = (fromMaybe "FIXME STUDY DESCRIPTION" $ dicomStudyDescription oneFile) ++ "/" ++ (fromMaybe "FIXME SERIES DESCRIPTION" $ dicomSeriesDescription oneFile)
+    experiments = [eiResourceURI re]
+    schema      = schemaDataset
+    m           = [] -- FIXME we should do some metadata for datasets! [(schema, m)]
+
+identifyDatasetFile :: RestDataset -> String -> String -> Integer -> [(String, M.Map String String)] -> IdentifiedFile
+identifyDatasetFile rds filepath md5sum size metadata = IdentifiedFile
+                                        (dsiResourceURI rds)
+                                        filepath
+                                        md5sum
+                                        size
+                                        metadata
+
+
+
+grabMetadata :: DicomFile -> [(String, String)]
+grabMetadata file = map oops $ concatMap f metadata
+
+  where
+
+    oops (x, y) = (y, x)
+
+    f :: (Maybe t, t) -> [(t, t)]
+    f (Just x,  desc) = [(x, desc)]
+    f (Nothing, _)    = []
+
+    metadata = 
+        [ (dicomPatientName            file, "Patient Name")
+        , (dicomPatientID              file, "Patient ID")
+        , (dicomPatientBirthDate       file, "Patient Birth Date")
+        , (dicomPatientSex             file, "Patient Sex")
+        , (dicomPatientAge             file, "Patient Age")
+        , (dicomPatientWeight          file, "Patient Weight")
+        , (dicomPatientPosition        file, "Patient Position")
+
+        , (dicomStudyDate              file, "Study Date")
+        , (dicomStudyTime              file, "Study Time")
+        , (dicomStudyDescription       file, "Study Description")
+        -- , (dicomStudyInstanceID        file, "Study Instance ID")
+        , (dicomStudyID                file, "Study ID")
+
+        , (dicomSeriesDate             file, "Series Date")
+        , (dicomSeriesTime             file, "Series Time")
+        , (dicomSeriesDescription      file, "Series Description")
+        -- , (dicomSeriesInstanceUID      file, "Series Instance UID")
+        -- , (dicomSeriesNumber           file, "Series Number")
+        -- , (dicomCSASeriesHeaderType    file, "CSA Series Header Type")
+        -- , (dicomCSASeriesHeaderVersion file, "CSA Series Header Version")
+        -- , (dicomCSASeriesHeaderInfo    file, "CSA Series Header Info")
+        -- , (dicomSeriesWorkflowStatus   file, "Series Workflow Status")
+
+        -- , (dicomMediaStorageSOPInstanceUID file, "Media Storage SOP Instance UID")
+        -- , (dicomInstanceCreationDate       file, "Instance Creation Date")
+        -- , (dicomInstanceCreationTime       file, "Instance Creation Time")
+        -- , (dicomSOPInstanceUID             file, "SOP Instance UID")
+        -- , (dicomStudyInstanceUID           file, "Study Instance UID")
+        -- , (dicomInstanceNumber             file, "Instance Number")
+
+        , (dicomInstitutionName                file, "Institution Name")
+        , (dicomInstitutionAddress             file, "Institution Address")
+        , (dicomInstitutionalDepartmentName    file, "Institutional Department Name")
+
+        , (dicomReferringPhysicianName         file, "Referring Physician Name")
+        ]

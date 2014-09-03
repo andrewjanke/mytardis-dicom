@@ -25,83 +25,16 @@ import RestTypes
 import Types
 import Utils
 
--- FIXME Testing, need to work out what these will be later.
-experimentTitlePrefix = "CAI Test Experiment "
-experimentDescriptionPrefix = "CAI Test Experiment Description"
-datasetDescription = "CAI Dataset Description"
-
--- FIXME These should be in a reader or something.
-schemaExperiment  = "http://cai.uq.edu.au/schema/metadata/1"
-schemaDataset     = "http://cai.uq.edu.au/schema/metadata/2"
-schemaDicomFile   = "http://cai.uq.edu.au/schema/metadata/3"
-schemaCaiProject  = "http://cai.uq.edu.au/schema/metadata/4"
-
-defaultInstitutionName = "DEFAULT INSTITUTION"
-
-identifyExperiment :: [DicomFile] -> IdentifiedExperiment
-identifyExperiment files = IdentifiedExperiment
-                                description
-                                institution
-                                title
-                                [(schema, m)]
-  where
-    oneFile = headMay files
-
-    patientName       = join $ dicomPatientName       <$> oneFile
-    studyDescription  = join $ dicomStudyDescription  <$> oneFile
-    seriesDescription = join $ dicomSeriesDescription <$> oneFile
-
-    -- Experiment
-    title       = fromMaybe "DUD TITLE FIXME" $ (experimentTitlePrefix ++) <$> patientName
-    description = experimentDescriptionPrefix
-
-    institution = fromMaybe "DEFAULT INSTITUTION FIXME" $ join $ dicomInstitutionName <$> oneFile
-
-    institutionalDepartmentName = fromMaybe "DEFAULT INSTITUTION DEPT NAME FIXME" $ join $ dicomInstitutionName    <$> oneFile
-    institutionAddress          = fromMaybe "DEFAULT INSTITUTION ADDRESS FIXME" $ join $ dicomInstitutionAddress <$> oneFile
-
-    patientID = fromMaybe "FIXME DUD PATIENT ID" $ join $ dicomPatientID <$> oneFile -- FIXME dangerous? Always get a patient id?
-
-    -- FIXME deal with multiple schemas.
-    schema = "http://cai.uq.edu.au/schema/metadata/1" -- "DICOM Experiment Metadata"
-
-    m = M.fromList
-            [ ("InstitutionName",             institution)
-            , ("InstitutionalDepartmentName", institutionalDepartmentName)
-            , ("InstitutionAddress",          institutionAddress)
-            , ("PatientID",                   patientID)
-            ]
-
 -- FIXME WHAT HAPPENS WHEN ONE DATASET BELONGS TO MULTIPLE EXPERIMENTS? DO WE HAVE
 -- TO DEAL WITH THAT WHEN MATCHING DATASETS?
-
-identifyDataset :: RestExperiment -> [DicomFile] -> IdentifiedDataset
-identifyDataset re files = IdentifiedDataset
-                                description
-                                experiments
-                                m
-  where
-    oneFile = head files -- FIXME this will explode, use headMay instead
-    description = (fromMaybe "FIXME STUDY DESCRIPTION" $ dicomStudyDescription oneFile) ++ "/" ++ (fromMaybe "FIXME SERIES DESCRIPTION" $ dicomSeriesDescription oneFile)
-    experiments = [eiResourceURI re]
-    schema      = schemaDataset
-    m           = [] -- FIXME we should do some metadata for datasets! [(schema, m)]
-
-identifyDatasetFile :: RestDataset -> String -> String -> Integer -> [(String, M.Map String String)] -> IdentifiedFile
-identifyDatasetFile rds filepath md5sum size metadata = IdentifiedFile
-                                        (dsiResourceURI rds)
-                                        filepath
-                                        md5sum
-                                        size
-                                        metadata
 
 -- FIXME only for testing, get rid of this.
 fromSuccess :: Result a -> a
 fromSuccess (Success s) = s
 fromSuccess _ = error "derp"
 
-uploadFileBasic  :: RestDataset -> FilePath -> [(String, M.Map String String)] -> ReaderT MyTardisConfig IO (Result RestDatasetFile)
-uploadFileBasic d f m = do
+-- uploadFileBasic  :: RestDataset -> FilePath -> [(String, M.Map String String)] -> ReaderT MyTardisConfig IO (Result RestDatasetFile)
+uploadFileBasic identifyDatasetFile d f m = do
     meta <- liftIO $ calcFileMetadata f
 
     liftIO $ print ("METADATA FOR FILE", m)
@@ -117,14 +50,13 @@ uploadFileBasic d f m = do
         Nothing                        -> return $ Error "FIXME1234"
 
 
-uploadDicomAsMinc :: FilePath -> FilePath -> ReaderT MyTardisConfig IO ()
-uploadDicomAsMinc dir processedDir = do
+-- uploadDicomAsMinc :: ([DicomFile] -> IdentifiedExperiment) -> FilePath -> FilePath -> ReaderT MyTardisConfig IO ()
+uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile dir processedDir = do
     -- ever get an empty list in files?
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
     let groups = group2 _files
 
     forM_ groups $ \files -> do
-        -- let IdentifiedExperiment desc institution title metadata = identifyExperiment files
         let ie@(IdentifiedExperiment desc institution title metadata) = identifyExperiment files
 
         -- Now pack the dicom files as Minc
@@ -144,6 +76,8 @@ uploadDicomAsMinc dir processedDir = do
                                   liftIO $ forM_ mincFiles mncToMnc2 -- FIXME check results
 
                                   let oneFile = head files -- FIXME unsafe
+                                      filemetadata = [] -- FIXME need to pass a fn to do this
+                                      {-
                                       filemetadata = [(schemaDicomFile, M.fromList
                                                                             [ ("PatientID",          fromMaybe "FIXME2 PATIENT ID"   $ dicomPatientID         oneFile)
                                                                             , ("StudyInstanceUID",   fromMaybe "FIXME2 STUDY UID"    $ dicomStudyInstanceUID  oneFile)
@@ -151,13 +85,14 @@ uploadDicomAsMinc dir processedDir = do
                                                                             ]
                                                       )
                                                      ]
+                                      -}
  
                                   forM_ mincFiles $ \f -> do
-                                        dsf <- uploadFileBasic d f filemetadata
+                                        dsf <- uploadFileBasic identifyDatasetFile d f filemetadata
                                         liftIO $ print dsf
 
                                         Right thumbnail <- liftIO $ createMincThumbnail f -- FIXME dangerous pattern match
-                                        dsft <- uploadFileBasic d thumbnail filemetadata
+                                        dsft <- uploadFileBasic identifyDatasetFile d thumbnail filemetadata
 
                                         liftIO $ print dsft
 
