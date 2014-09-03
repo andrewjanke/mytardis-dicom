@@ -7,7 +7,7 @@ import Prelude hiding (FilePath)
 
 import Data.Either
 import Data.Char (toLower)
-import Data.List
+import Data.List hiding (find)
 import Data.Maybe
 import Control.Applicative ((<$>), (<*>), (<*))
 import Control.Monad
@@ -15,8 +15,6 @@ import Control.Monad.Identity
 import Control.Monad.Reader
 import Control.Monad.ST
 import Control.Monad.Trans.Writer.Lazy ()
-import Control.Proxy
-import Control.Proxy.Trans.Writer
 import Data.Function (on)
 import Data.Ord (comparing)
 import Data.Functor.Identity
@@ -35,6 +33,8 @@ import System.Exit (ExitCode(..))
 
 import System.Unix.Directory (removeRecursiveSafely)
 
+import System.FilePath.Find
+
 import Utils (runShellCommand)
 
 -- http://stackoverflow.com/a/7233657/3659845
@@ -50,28 +50,16 @@ unescapeEntities (x:xs) = x : unescapeEntities xs
 
 -- Note on execWriterT/raiseK: http://ocharles.org.uk/blog/posts/2012-12-16-24-days-of-hackage-pipes.html
 getRecursiveContentsList :: FilePath -> IO [FilePath]
-getRecursiveContentsList path =
-    runProxy $ execWriterK $ (getRecursiveContents path) >-> toListD
-  where
-    -- http://stackoverflow.com/questions/14259229/streaming-recursive-descent-of-a-directory-in-haskell/14261710#14261710
-    -- getRecursiveContents :: (Proxy p) => FilePath -> () -> Producer p FilePath IO ()
-    getRecursiveContents topPath () = do -- runIdentityP $ do
-      properNames <- fmap (filter (`notElem` [".", ".."])) (lift $ getDirectoryContents topPath)
-      forM_ properNames $ \name -> do
-        let path = topPath </> name
-        isDirectory <- lift $ doesDirectoryExist path
-        if isDirectory
-          then getRecursiveContents path ()
-          else respond path
+getRecursiveContentsList path = find always (fileType ==? RegularFile) path
 
 dcmDump :: FilePath -> IO (Either String String)
 dcmDump fileName = runShellCommand "dcmdump" ["+Qn", fileName]
 
-globDcmFiles :: FilePath -> IO ([[FilePath]], [FilePath])
-globDcmFiles = globDirWith (matchDefault { ignoreCase = True }) [compile "*.dcm"]
+globDcmFiles :: FilePath -> IO [FilePath]
+globDcmFiles path = namesMatching $ path </> "*.dcm"
 
 createLinksDirectory :: FilePath -> IO FilePath
-createLinksDirectory dicomDir = concat . fst <$> globDcmFiles dicomDir >>= createLinksDirectoryFromList
+createLinksDirectory dicomDir = globDcmFiles dicomDir >>= createLinksDirectoryFromList
 
 createLinksDirectoryFromList :: [FilePath] -> IO FilePath
 createLinksDirectoryFromList dicomFiles = do
