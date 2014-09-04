@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Monad.Reader
+import Control.Monad (when)
 import Data.Configurator
 import Data.Traversable (traverse)
 import Data.Either
@@ -74,7 +75,7 @@ dostuff opts@(UploaderOptions _ _ _ _ (CmdShowExperiments cmdShow)) = do
     let dir = getDicomDir opts
 
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
-    let groups = group2 _files
+    let groups = groupDicomFiles _files
 
     liftIO $ print groups
 
@@ -87,7 +88,7 @@ dostuff opts@(UploaderOptions _ _ _ _ (CmdShowExperiments cmdShow)) = do
             then printf "%s [%s] [%s] [%s] [%s]\n" hash institution desc title (unwords $ map dicomFilePath files)
             else printf "%s [%s] [%s] [%s]\n"      hash institution desc title
 
-dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadAll allOpts)) = uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile (getDicomDir opts) (optProcessedDir opts)
+dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadAll allOpts)) = uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile (getDicomDir opts) (optProcessedDir opts) (schemaExperiment, schemaDataset, schemaDicomFile)
 
 dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadOne oneOpts)) = do
     let hash = uploadOneHash oneOpts
@@ -95,7 +96,7 @@ dostuff opts@(UploaderOptions _ _ _ _ (CmdUploadOne oneOpts)) = do
     let dir = getDicomDir opts
 
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
-    let groups = group2 _files
+    let groups = groupDicomFiles _files
 
     let
         hashes = map (hashFiles . fmap dicomFilePath) groups :: [String]
@@ -137,7 +138,7 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
         let dir = "/tmp/dicomdump"
 
         _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
-        let files = head $ group2 _files
+        let files = head $ groupDicomFiles _files
 
         x <- getExperimentWithMetadata (identifyExperiment files)
 
@@ -160,7 +161,7 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
         liftIO $ print admin
         liftIO $ print cai12345
 
-        A.Success experiment <- getExperiment "/api/v1/experiment/1/"
+        A.Success experiment <- getExperiment "/api/v1/experiment/3/"
         liftIO $ print experiment
 
         -- addGroupReadOnlyAccess experiment cai12345
@@ -175,11 +176,11 @@ testtmp = flip runReaderT (defaultMyTardisOptions "http://localhost:8000" "admin
         eacl <- getOrCreateExperimentACL experiment cai12345
         liftIO $ print ("eacl", eacl)
  
-        experiment' <- addGroupReadOnlyAccess experiment cai12345
-        liftIO $ print ("experiment'", experiment')
+        -- experiment' <- addGroupReadOnlyAccess experiment cai12345
+        -- liftIO $ print ("experiment'", experiment')
 
-        user' <- addGroupToUser admin cai12345
-        liftIO $ print user'
+        -- user' <- addGroupToUser admin cai12345
+        -- liftIO $ print user'
 
         liftIO $ print "done"
 

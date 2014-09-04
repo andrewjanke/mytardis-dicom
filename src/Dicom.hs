@@ -258,27 +258,14 @@ getDicomFilesInDirectory suffix dir = filter (isLowerSuffix suffix) <$> getFiles
     getFilesInDirectory :: FilePath -> IO [FilePath]
     getFilesInDirectory d = map (d </>) <$> filter (not . (`elem` [".", ".."])) <$> getDirectoryContents d >>= filterM doesFileExist
 
-{-
-groupDicomFilesByPatientID files = groupBy ((==) `on` dicomPatientID) files
-
-groupDicomFilesByStudyAndSeries :: [DicomFile] -> [[DicomFile]]
-groupDicomFilesByStudyAndSeries files = groupBy f files
-  where
-    f d1 d2 = dicomStudyDescription  d1 == dicomStudyDescription  d2 &&
-              dicomSeriesDescription d1 == dicomSeriesDescription d2
--}
-
-group2 :: [DicomFile] -> [[DicomFile]]
-group2 files = fmap (map snd) $ groupBy ((==) `on` fst) (sortOn fst $ map toTuple files)
+groupDicomFiles :: [DicomFile] -> [[DicomFile]]
+groupDicomFiles files = fmap (map snd) $ groupBy ((==) `on` fst) (sortOn fst $ map toTuple files)
 
   where
 
-    toTuple file = ((dicomPatientID file, dicomStudyDescription file, dicomSeriesDescription file), file)
+    toTuple file = ((dicomPatientID file, dicomPatientName file, dicomStudyDescription file, dicomSeriesDescription file), file)
 
     -- https://ghc.haskell.org/trac/ghc/ticket/9004
     sortOn :: Ord b => (a -> b) -> [a] -> [a]
     sortOn f = map snd . sortBy (comparing fst)
                        . map (\x -> let y = f x in y `seq` (y, x))
-
-
-

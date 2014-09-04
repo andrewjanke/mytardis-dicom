@@ -49,12 +49,49 @@ uploadFileBasic identifyDatasetFile d f m = do
                                              return $ Success dsf
         Nothing                        -> return $ Error "FIXME1234"
 
+createSchemasIfMissing :: (String, String, String) -> ReaderT MyTardisConfig IO (Result (RestSchema, RestSchema, RestSchema))
+createSchemasIfMissing (schemaExperiment, schemaDataset, schemaDicomFile) = do
+    schemas <- getSchemas
+
+    case schemas of
+        Error e -> return $ Error e
+        Success schemas' -> do experimentSchema <- createIfMissing "DICOM Metadata Experiment" schemaExperiment SchemaExperiment  schemas'
+                               datasetSchema    <- createIfMissing "DICOM Metadata Dataset"    schemaDataset    SchemaDataset     schemas'
+                               fileSchema       <- createIfMissing "DICOM Metadata File"       schemaDicomFile  SchemaDatasetFile schemas'
+
+                               return $ case (experimentSchema, datasetSchema, fileSchema) of
+                                         (Success experimentSchema', Success datasetSchema', Success fileSchema') -> Success (experimentSchema', datasetSchema', fileSchema')
+                                         _                                                                        -> Error "Failed to create schema (which one?)."
+
+  where
+
+    schemaExists  :: String -> [RestSchema] -> Bool
+    schemaExists ns schemas = any ((==) ns . schemaNamespace) schemas
+
+    -- createIfMissing :: String -> [RestSchema] -> ???
+    createIfMissing name namespace stype schemas = if schemaExists namespace schemas
+                                    then return $ Success $ head $ filter ((==) namespace . schemaNamespace) schemas
+                                    else createSchema name namespace stype
+
 
 -- uploadDicomAsMinc :: ([DicomFile] -> IdentifiedExperiment) -> FilePath -> FilePath -> ReaderT MyTardisConfig IO ()
-uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile dir processedDir = do
+uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile dir processedDir (schemaExperiment, schemaDataset, schemaDicomFile) = do
+
+    schemas <- createSchemasIfMissing (schemaExperiment, schemaDataset, schemaDicomFile)
+
+    -- FIXME Chuck a wobbly if the schemas aren't successfully made/found.
+    -- FIXME Schema names should be configurable - and then we get to deal with name changes etc.
+ 
     -- ever get an empty list in files?
     _files <- liftIO $ rights <$> (getDicomFilesInDirectory ".dcm" dir >>= mapM readDicomMetadata)
-    let groups = group2 _files
+    let groups = groupDicomFiles _files
+
+    -- FIXME Just doing some defaults at the moment, dangerously
+    -- assuming Success at each step.
+    Success users <- getUsers
+    let admin = head $ filter ((==) "admin" . ruserUsername) users -- FIXME assumes account exists...
+    Success adminGroup <- getOrCreateGroup "admin"
+    addGroupToUser admin adminGroup
 
     forM_ groups $ \files -> do
         let ie@(IdentifiedExperiment desc institution title metadata) = identifyExperiment files
@@ -66,6 +103,8 @@ uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile dir pro
                                   liftIO $ print _e
 
                                   let e = fromSuccess _e
+
+                                  addGroupReadOnlyAccess e adminGroup
 
                                   let ids@(IdentifiedDataset desc experiments metadata) = identifyDataset e files
 
@@ -91,10 +130,12 @@ uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile dir pro
                                         dsf <- uploadFileBasic identifyDatasetFile d f filemetadata
                                         liftIO $ print dsf
 
-                                        Right thumbnail <- liftIO $ createMincThumbnail f -- FIXME dangerous pattern match
-                                        dsft <- uploadFileBasic identifyDatasetFile d thumbnail filemetadata
+                                        thumbnail <- liftIO $ createMincThumbnail f
 
-                                        liftIO $ print dsft
+                                        case thumbnail of
+                                            Right thumbnail' -> do dsft <- uploadFileBasic identifyDatasetFile d thumbnail' filemetadata
+                                                                   liftIO $ print dsft
+                                            Left e           -> liftIO $ putStrLn $ "Error while creating thumbnail: " ++ e ++ " for file " ++ f
 
 
         -- FIXME Need to catch IO exceptions earlier...
@@ -105,3 +146,5 @@ uploadDicomAsMinc identifyExperiment identifyDataset identifyDatasetFile dir pro
             -- FIXME check exceptions
             -- FIXME check if target exists and make backup instead...
             removeFile f'
+
+    return ()
